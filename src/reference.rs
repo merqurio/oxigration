@@ -178,58 +178,42 @@ impl Stmt {
 /// ```
 fn parse_change_stmts(content: &str, start_delimiter: &str, end_delimiter: &str, key: &str) -> IndexMap<String, Stmt> {
     let mut result: IndexMap<String, Stmt> = IndexMap::new();
+    let mut dependencies: HashSet<String> = HashSet::new();
     let mut current_name = String::new();
-    let mut current_content = String::new();
-    let mut current_attributes = HashMap::new();
+    let mut value = String::new();
+    let mut properties = HashMap::new();
     let mut in_statement = false;
 
     for line in content.lines() {
         if line.trim().starts_with(start_delimiter) {
-            if in_statement {
-                result.insert(current_name.clone(), Stmt::new(
-                    current_name.clone(),
-                    current_content.trim().to_string(),
-                    HashSet::new(),
-                    current_attributes.clone(),
-                ));
-                current_name.clear();
-                current_content.clear();
-                current_attributes.clear();
-            }
             in_statement = true;
-            current_attributes = line.trim_start_matches(start_delimiter)
+            properties = line.trim_start_matches(start_delimiter)
                 .split_whitespace()
                 .filter_map(|attr| {
                     let mut parts = attr.split('=');
                     Some((parts.next()?.to_string(), parts.next()?.to_string()))
                 })
                 .collect();
-            current_name = current_attributes.get(key).cloned().unwrap_or_default();
+            current_name = properties.get(key).cloned().unwrap_or_default();
         } else if line.trim() == end_delimiter {
             if in_statement {
-                result.insert(current_name.clone(), Stmt::new(
-                    current_name.clone(),
-                    current_content.trim().to_string(),
-                    HashSet::new(),
-                    current_attributes.clone(),
+                result.insert(current_name.clone(), 
+                    Stmt::new(
+                        current_name.clone(),
+                        value.trim().to_string(),
+                        dependencies.clone(),
+                        properties.clone(),
                 ));
-                current_content.clear();
-                current_attributes.clear();
+                dependencies.insert(current_name.clone());
+                current_name.clear();
+                value.clear();
+                properties.clear();
                 in_statement = false;
             }
         } else if in_statement {
-            current_content.push_str(line);
-            current_content.push('\n');
+            value.push_str(line);
+            value.push('\n');
         }
-    }
-
-    if in_statement {
-        result.insert(current_name.clone(), Stmt::new(
-            current_name,
-            current_content.trim().to_string(),
-            HashSet::new(),
-            current_attributes,
-        ));
     }
 
     result
