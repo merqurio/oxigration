@@ -72,7 +72,6 @@ use crate::RelationalObject;
 ///     }
 /// }
 /// ```
-
 pub fn read_desired_state(base_dir: &str) -> Result<HashMap<String, RelationalObject>, Box<dyn Error>> {
     let mut object_info: HashMap<String, RelationalObject> = HashMap::new();
 
@@ -129,16 +128,23 @@ pub fn read_desired_state(base_dir: &str) -> Result<HashMap<String, RelationalOb
     Ok(object_info)
 }
 
-
 #[derive(Debug)]
+/// Represents a statement with associated metadata.
+///
+/// This struct encapsulates a named statement along with its value,
+/// dependencies, and additional properties.
 struct Stmt {
+    /// The name of the statement.
     name: String,
+    /// The actual content or value of the statement.
     value: String,
+    /// A set of dependencies for this statement.
     dependencies: HashSet<String>,
+    /// Additional properties associated with the statement.
     properties: HashMap<String, String>
-
 }
 
+/// Provides methods for creating and manipulating `Stmt` instances.
 impl Stmt {
     /// Creates a new SqlObject with the given parameters.
     pub fn new(
@@ -155,6 +161,7 @@ impl Stmt {
         }
     }
 }
+
 /// Parses a string containing multiple statements delimited by start and end delimiters,
 /// and returns the text between the delimeters together with the attributes defined in the start_delimetere.
 ///
