@@ -2,10 +2,13 @@ use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fs::File;
 use std::io::Read;
+use std::path::Path;
 use walkdir::WalkDir;
 use indexmap::IndexMap;
-
+use petgraph::graphmap::DiGraphMap;
+use petgraph::algo::toposort;
 use crate::RelationalObject;
+use pg_query::NodeEnum;
 
 /// Reads and processes a directory containing multiple subdirectories, each representing a type of
 /// database object.
@@ -72,8 +75,8 @@ use crate::RelationalObject;
 ///     }
 /// }
 /// ```
-pub fn read_desired_state(base_dir: &str) -> Result<HashMap<String, RelationalObject>, Box<dyn Error>> {
-    let mut object_info: HashMap<String, RelationalObject> = HashMap::new();
+pub fn read_desired_state(base_dir: &str) -> Result<IndexMap<String, RelationalObject>, Box<dyn Error>> {
+    let mut object_info: IndexMap<String, RelationalObject> = IndexMap::new();
 
     log::debug!("Reading desired state from {}", base_dir);
     for entry in WalkDir::new(base_dir).into_iter().filter_map(|e| e.ok()) {
@@ -89,43 +92,67 @@ pub fn read_desired_state(base_dir: &str) -> Result<HashMap<String, RelationalOb
             file.read_to_string(&mut contents)?;
 
             if object_type.to_lowercase() == "table" {
-                let parsed_stmts = 
-                    parse_change_stmts(&contents, "//// CHANGE", "GO", "name");
+                let parsed_stmts = parse_change_stmts(&contents, "//// CHANGE", "GO", "name");
                 for (_, stmt) in parsed_stmts {
-                    if let Ok(parsed_content) = pg_query::parse(&stmt.value.to_string()) {
-                        let object_name = file_path.file_stem().and_then(|n| n.to_str())
-                            .ok_or("Invalid object name")?;
-                        let key = format!("{}.{}.{}.{}", schema_name, object_type, object_name, stmt.name);
-                        let relational_object = RelationalObject::new(
-                            schema_name.to_string(),
-                            object_type.to_string(),
-                            key.clone(),
-                            parsed_content.protobuf,
-                            stmt.dependencies,
-                            stmt.properties
-                        );
-                        object_info.insert(key, relational_object);
+                    if let Ok(relational_object) = process_sql_file(file_path, schema_name, object_type, &contents, Some(&stmt)) {
+                        object_info.insert(relational_object.object_name.clone(), relational_object);
                     }
                 }
             } else {
-                if let Ok(parsed_content) = pg_query::parse(&contents) {
-                    let object_name = file_path.file_stem().and_then(|n| n.to_str())
-                        .ok_or("Invalid object name")?;
-                    let key = format!("{}.{}.{}.{}", schema_name, object_type, object_name, "root");
-                    let relational_object = RelationalObject::new(
-                        schema_name.to_string(),
-                        object_type.to_string(),
-                        key.clone(),
-                            parsed_content.protobuf,
-                           HashSet::new(), 
-                            HashMap::new() 
-                    );
-                    object_info.insert(key, relational_object);
+                if let Ok(relational_object) = process_sql_file(file_path, schema_name, object_type, &contents, None) {
+                    object_info.insert(relational_object.object_name.clone(), relational_object);
                 }
             }
         }
     }
-    Ok(object_info)
+    let ordered_object_info = determine_execution_order(&object_info)?;
+    Ok(ordered_object_info)
+}
+
+fn process_sql_file(file_path: &Path, schema_name: &str, object_type: &str, contents: &str, stmt: Option<&Stmt>) -> Result<RelationalObject, Box<dyn Error>> {
+    let parsed_content = pg_query::parse(&stmt.map_or(contents, |s| &s.value))?;
+    let first_object = parsed_content.protobuf.stmts.first().ok_or("No objects found in parsed content")?;
+    let node = first_object.stmt.as_ref().ok_or("No statement found in first object")?;
+    
+    if let Some(range_var) = match &node.node {
+        Some(NodeEnum::RangeVar(range_var)) => Some(range_var),
+        Some(NodeEnum::CreateStmt(create_stmt)) => create_stmt.relation.as_ref(),
+        Some(NodeEnum::AlterTableStmt(alter_stmt)) => alter_stmt.relation.as_ref(),
+        Some(NodeEnum::DeleteStmt(delete_stmt)) => delete_stmt.relation.as_ref(),
+        _ => None,
+    } {
+        let object_name = file_path.file_stem()
+            .and_then(|stem| stem.to_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| range_var.relname.clone());
+        if object_name != range_var.relname {
+            log::warn!("Object name '{}' in file does not match name '{}' in SQL", object_name, range_var.relname);
+        }
+        let schema_name = if range_var.schemaname.is_empty() {
+            schema_name.to_string()
+        } else {
+            range_var.schemaname.clone()
+        };
+        
+        let key = match stmt {
+            Some(stmt) => format!("{}.{}.{}.{}", schema_name, object_type, object_name, stmt.change_name),
+            None => format!("{}.{}.{}.{}", schema_name, object_type, object_name, "root"),
+        };
+
+        let dependencies = stmt.map_or_else(HashSet::new, |s| s.dependencies.clone());
+        let properties = stmt.map_or_else(HashMap::new, |s| s.properties.clone());
+
+        Ok(RelationalObject::new(
+            schema_name.to_string(),
+            object_type.to_string(),
+            key,
+            parsed_content.protobuf,
+            dependencies,
+            properties,
+        ))
+    } else {
+        return Err("No RangeVar found in node".into());
+    }
 }
 
 #[derive(Debug)]
@@ -135,7 +162,7 @@ pub fn read_desired_state(base_dir: &str) -> Result<HashMap<String, RelationalOb
 /// dependencies, and additional properties.
 struct Stmt {
     /// The name of the statement.
-    name: String,
+    change_name: String,
     /// The actual content or value of the statement.
     value: String,
     /// A set of dependencies for this statement.
@@ -148,13 +175,13 @@ struct Stmt {
 impl Stmt {
     /// Creates a new SqlObject with the given parameters.
     pub fn new(
-        name: String,
+        change_name: String,
         value: String,
         dependencies: HashSet<String>,
         properties: HashMap<String, String>,
     ) -> Self {
         Stmt {
-            name,
+            change_name,
             value,
             dependencies,
             properties
@@ -224,4 +251,34 @@ fn parse_change_stmts(content: &str, start_delimiter: &str, end_delimiter: &str,
     }
 
     result
+}
+
+fn determine_execution_order(
+    object_info: &IndexMap<String, RelationalObject>
+) -> Result<IndexMap<String, RelationalObject>, Box<dyn std::error::Error>> {
+    // Create a directed graph
+    let mut graph = DiGraphMap::new();
+
+    // Add nodes and edges based on dependencies
+    for (key, obj) in object_info {
+        graph.add_node(key.as_str());
+        for dep in &obj.dependencies {
+            graph.add_edge(dep.as_str(), key.as_str(), ());
+        }
+    }
+
+    // Perform topological sort to determine execution order
+    let order = toposort(&graph, None)
+        .map_err(|_| "Cycle detected in dependencies")?;
+
+    // Convert the order to a vector of strings
+    let execution_order: Vec<String> = order.into_iter().map(|s| s.to_string()).collect();
+
+    let mut ordered_object_info = IndexMap::new();
+    for key in execution_order {
+        if let Some(obj) = object_info.get(&key) {
+            ordered_object_info.insert(key.clone(), obj.clone());
+        }
+    }
+    Ok(ordered_object_info)
 }

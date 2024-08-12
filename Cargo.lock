@@ -1051,6 +1051,7 @@ dependencies = [
  "fern",
  "indexmap 1.9.3",
  "log",
+ "petgraph",
  "pg_query",
  "serde",
  "serde_json",
