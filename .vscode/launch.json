@@ -26,36 +26,36 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug executable 'migrate'",
+            "name": "Debug executable 'oxigration'",
             "cargo": {
                 "args": [
                     "build",
-                    "--bin=migrate",
+                    "--bin=oxigration",
                     "--package=oxigration"
                 ],
                 "filter": {
-                    "name": "migrate",
+                    "name": "oxigration",
                     "kind": "bin"
                 }
             },
             "args": [
-                "--dir=tests/schemas",
+                "--dir=tests/schemas/baseline",
             ],
             "cwd": "${workspaceFolder}"
         },
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug unit tests in executable 'migrate'",
+            "name": "Debug unit tests in executable 'oxigration'",
             "cargo": {
                 "args": [
                     "test",
                     "--no-run",
-                    "--bin=migrate",
+                    "--bin=oxigration",
                     "--package=oxigration"
                 ],
                 "filter": {
-                    "name": "migrate",
+                    "name": "oxigration",
                     "kind": "bin"
                 }
             },
