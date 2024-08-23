@@ -14,7 +14,7 @@ Oxigration is a SQL migration manager designed to implement database schemas bas
 **Example Directory Layout**
 
 ```sh
-.
+my_schema/
 ├── function
 │   ├── func1.sql
 │   └── func_with_overload.sql
