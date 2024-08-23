@@ -2,13 +2,12 @@
 
 Oxigration is a SQL migration manager designed to implement database schemas based on individual files defining SQL objects organized in directories. This tool simplifies the process of managing and applying database schema changes across different environments.
 
-## Features
+**Features**
 
-- Parses SQL object definitions from separate files
-- Organizes SQL objects in a directory structure
-- Generates and applies migration scripts
+- Takes DBMS objects represented in files and migrates the DBMS
 - Tracks schema version and applied migrations
 - Supports multiple database environments
+- Generate DBMS objects source code from the DBMS
 
 ## Overview
 
