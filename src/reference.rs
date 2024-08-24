@@ -3,13 +3,14 @@ use crate::utils::topsort::topo_sort;
 use indexmap::IndexMap;
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser;
-use sqlparser::ast::{Visit, Visitor};
+use sqlparser::ast::{Visitor, ObjectName, Statement};
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 use walkdir::WalkDir;
+use core::ops::ControlFlow;
 
 /// Reads and processes a directory containing multiple subdirectories, each representing a type of
 /// database object.
@@ -154,7 +155,7 @@ fn build_relational_object(
         .ok_or("No objects found in parsed content")?;
 
     let mut visitor = SqlVisitor::new();
-    visitor.visit_statement(first_object);
+    visitor.pre_visit_statement(first_object); // Use pre_visit_statement method
 
     let object_name = file_path
         .file_stem()
@@ -207,39 +208,42 @@ impl SqlVisitor {
             schema_name: String::new(),
         }
     }
+}
 
-    fn visit_statement(&mut self, stmt: &sqlparser::ast::Statement) {
+impl Visitor for SqlVisitor {
+    type Break = ();
+
+    fn pre_visit_statement(&mut self, stmt: &Statement) -> ControlFlow<Self::Break> {
         match stmt {
-            sqlparser::ast::Statement::CreateTable(stmt) => {
+            Statement::CreateTable(stmt) => {
                 self.visit_object_name(&stmt.name);
             }
-            sqlparser::ast::Statement::CreateView { name, .. } => {
+            Statement::CreateView { name, .. } => {
                 self.visit_object_name(name);
             }
-            sqlparser::ast::Statement::CreateFunction { name, .. } => {
+            Statement::CreateFunction { name, .. } => {
                 self.visit_object_name(name);
             }
-            sqlparser::ast::Statement::CreateProcedure { name, .. } => {
+            Statement::CreateProcedure { name, .. } => {
                 self.visit_object_name(name);
             }
-            sqlparser::ast::Statement::CreateIndex(stmt) => {
+            Statement::CreateIndex(stmt) => {
                 if let Some(name) = &stmt.name {
                     self.visit_object_name(name);
                 }
             }
-            sqlparser::ast::Statement::CreateSequence { name, .. } => {
+            Statement::CreateSequence { name, .. } => {
                 self.visit_object_name(name);
             }
             _ => {}
         }
+        ControlFlow::Continue(())
     }
+}
 
-    fn visit_object_name(&mut self, name: &sqlparser::ast::ObjectName) {
+impl SqlVisitor {
+    fn visit_object_name(&mut self, name: &ObjectName) {
         self.object_name = name.to_string();
-    }
-
-    fn visit_schema_name(&mut self, name: &sqlparser::ast::ObjectName) {
-        self.schema_name = name.to_string();
     }
 }
 
