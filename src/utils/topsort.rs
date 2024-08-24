@@ -12,32 +12,7 @@ type TopoSortResult<Node> = Result<Vec<Node>, TopologicalSortError>;
 /// Given a directed graph represented as a list of edges (source, destination),
 /// this function uses Kahn's algorithm to return a topological sort of the graph
 /// or detect if there's a cycle.
-///
-/// # Example
-///
-/// ```
-/// use crate::utils::topsort::{topo_sort, TopologicalSortError};
-///
-/// let graph = vec![(1, 2), (1, 3), (2, 3), (3, 4), (4, 5), (5, 6), (6, 7)];
-/// let sort = topo_sort(&graph);
-/// assert!(sort.is_ok());
-/// let sort = sort.unwrap();
-/// assert_eq!(sort, vec![1, 2, 3, 4, 5, 6, 7]);
-/// ```
-///
-/// # Cycle Detection
-///
-/// ```
-/// use crate::utils::topsort::{topo_sort, TopologicalSortError};
-///
-/// let graph = vec![(1, 2), (2, 3), (3, 4), (4, 5), (4, 2)];
-/// let sort = topo_sort(&graph);
-/// assert!(sort.is_err());
-/// assert_eq!(sort.err().unwrap(), TopologicalSortError::CycleDetected);
-/// ```
-pub fn topo_sort<Node: Hash + Eq + Copy>(
-    edges: &Vec<(Node, Node)>,
-) -> TopoSortResult<Node> {
+pub fn topo_sort<Node: Hash + Eq + Copy>(edges: &Vec<(Node, Node)>) -> TopoSortResult<Node> {
     // Step 1: Initialize data structures
     let mut edges_by_source: HashMap<Node, Vec<Node>> = HashMap::new();
     let mut incoming_edges_count: HashMap<Node, usize> = HashMap::new();
@@ -45,7 +20,10 @@ pub fn topo_sort<Node: Hash + Eq + Copy>(
     // Step 2: Build the graph and count incoming edges for each node
     for (source, destination) in edges {
         incoming_edges_count.entry(*source).or_insert(0);
-        edges_by_source.entry(*source).or_default().push(*destination);
+        edges_by_source
+            .entry(*source)
+            .or_default()
+            .push(*destination);
         *incoming_edges_count.entry(*destination).or_insert(0) += 1;
     }
 

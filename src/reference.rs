@@ -1,16 +1,16 @@
-use crate::RelationalObject;
 use crate::utils::topsort::topo_sort;
+use crate::DatabaseObject;
+use core::ops::ControlFlow;
 use indexmap::IndexMap;
+use sqlparser::ast::{ObjectName, Statement, Visitor};
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser;
-use sqlparser::ast::{Visitor, ObjectName, Statement};
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 use walkdir::WalkDir;
-use core::ops::ControlFlow;
 
 /// Reads and processes a directory containing multiple subdirectories, each representing a type of
 /// database object.
@@ -77,10 +77,8 @@ use core::ops::ControlFlow;
 ///     }
 /// }
 /// ```
-pub fn read_desired_state(
-    base_dir: &str,
-) -> Result<IndexMap<String, RelationalObject>, Box<dyn Error>> {
-    let mut object_info: IndexMap<String, RelationalObject> = IndexMap::new();
+pub fn reference(base_dir: &str) -> Result<IndexMap<String, DatabaseObject>, Box<dyn Error>> {
+    let mut object_info: IndexMap<String, DatabaseObject> = IndexMap::new();
 
     log::debug!("Reading desired state from {}", base_dir);
     for entry in WalkDir::new(base_dir).into_iter().filter_map(|e| e.ok()) {
@@ -147,7 +145,7 @@ fn build_relational_object(
     object_type: &str,
     contents: &str,
     stmt: Option<&Stmt>,
-) -> Result<RelationalObject, Box<dyn Error>> {
+) -> Result<DatabaseObject, Box<dyn Error>> {
     let dialect = GenericDialect {};
     let parsed_content = Parser::parse_sql(&dialect, &stmt.map_or(contents, |s| &s.value))?;
     let first_object = parsed_content
@@ -186,7 +184,7 @@ fn build_relational_object(
     let dependencies = stmt.map_or_else(HashSet::new, |s| s.dependencies.clone());
     let properties = stmt.map_or_else(HashMap::new, |s| s.properties.clone());
 
-    Ok(RelationalObject::new(
+    Ok(DatabaseObject::new(
         schema_name.to_string(),
         object_type.to_string(),
         key,
@@ -339,8 +337,8 @@ fn parse_change_stmts(
 /// # Errors
 /// Returns an error if a cycle is detected in the dependencies.
 fn determine_execution_order(
-    object_info: &IndexMap<String, RelationalObject>,
-) -> Result<IndexMap<String, RelationalObject>, Box<dyn std::error::Error>> {
+    object_info: &IndexMap<String, DatabaseObject>,
+) -> Result<IndexMap<String, DatabaseObject>, Box<dyn std::error::Error>> {
     let mut edges = Vec::new();
 
     for (key, obj) in object_info {
@@ -349,8 +347,7 @@ fn determine_execution_order(
         }
     }
 
-    let order = topo_sort(&edges)
-        .map_err(|_| "Cycle detected in dependencies")?;
+    let order = topo_sort(&edges).map_err(|_| "Cycle detected in dependencies")?;
 
     let execution_order: Vec<String> = order.into_iter().map(|s| s.to_string()).collect();
 
@@ -445,7 +442,8 @@ mod tests {
 
     #[test]
     fn test_parse_change_stmts_without_end_delimiters_and_one_statements() {
-        let content = "CREATE PROCEDURE sp1() LANGUAGE plpgsql AS $$ DECLARE val INTEGER; END $$; \n\nGO";
+        let content =
+            "CREATE PROCEDURE sp1() LANGUAGE plpgsql AS $$ DECLARE val INTEGER; END $$; \n\nGO";
         let parsed_stmts = parse_change_stmts(content, "//// CHANGE", "GO", "name");
         assert_eq!(parsed_stmts.len(), 1);
         assert!(parsed_stmts.contains_key("root0"));
