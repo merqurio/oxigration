@@ -196,57 +196,6 @@ fn build_relational_object(
     ))
 }
 
-struct SqlVisitor {
-    object_name: String,
-    schema_name: String,
-}
-
-impl SqlVisitor {
-    fn new() -> Self {
-        SqlVisitor {
-            object_name: String::new(),
-            schema_name: String::new(),
-        }
-    }
-}
-
-impl Visitor for SqlVisitor {
-    type Break = ();
-
-    fn pre_visit_statement(&mut self, stmt: &Statement) -> ControlFlow<Self::Break> {
-        match stmt {
-            Statement::CreateTable(stmt) => {
-                self.visit_object_name(&stmt.name);
-            }
-            Statement::CreateView { name, .. } => {
-                self.visit_object_name(name);
-            }
-            Statement::CreateFunction { name, .. } => {
-                self.visit_object_name(name);
-            }
-            Statement::CreateProcedure { name, .. } => {
-                self.visit_object_name(name);
-            }
-            Statement::CreateIndex(stmt) => {
-                if let Some(name) = &stmt.name {
-                    self.visit_object_name(name);
-                }
-            }
-            Statement::CreateSequence { name, .. } => {
-                self.visit_object_name(name);
-            }
-            _ => {}
-        }
-        ControlFlow::Continue(())
-    }
-}
-
-impl SqlVisitor {
-    fn visit_object_name(&mut self, name: &ObjectName) {
-        self.object_name = name.to_string();
-    }
-}
-
 /// Represents a statement with associated metadata.
 ///
 /// This struct encapsulates a named statement along with its value,
@@ -263,7 +212,6 @@ struct Stmt {
     properties: HashMap<String, String>,
 }
 
-/// Provides methods for creating and manipulating `Stmt` instances.
 impl Stmt {
     /// Creates a new SqlObject with the given parameters.
     pub fn new(
@@ -374,7 +322,6 @@ fn parse_change_stmts(
     result
 }
 
-
 /// Determines the execution order of relational objects based on their dependencies.
 ///
 /// This function takes an `IndexMap` of relational objects, where each object has a set of dependencies.
@@ -394,7 +341,6 @@ fn parse_change_stmts(
 fn determine_execution_order(
     object_info: &IndexMap<String, RelationalObject>,
 ) -> Result<IndexMap<String, RelationalObject>, Box<dyn std::error::Error>> {
-    // Create a list of edges based on dependencies
     let mut edges = Vec::new();
 
     for (key, obj) in object_info {
@@ -403,11 +349,9 @@ fn determine_execution_order(
         }
     }
 
-    // Perform topological sort to determine execution order
     let order = topo_sort(&edges)
         .map_err(|_| "Cycle detected in dependencies")?;
 
-    // Convert the order to a vector of strings
     let execution_order: Vec<String> = order.into_iter().map(|s| s.to_string()).collect();
 
     let mut ordered_object_info = IndexMap::new();
@@ -417,6 +361,56 @@ fn determine_execution_order(
         }
     }
     Ok(ordered_object_info)
+}
+
+/// Visitor implementation for SQL statements.
+struct SqlVisitor {
+    object_name: String,
+    schema_name: String,
+}
+
+impl SqlVisitor {
+    fn new() -> Self {
+        SqlVisitor {
+            object_name: String::new(),
+            schema_name: String::new(),
+        }
+    }
+
+    fn visit_object_name(&mut self, name: &ObjectName) {
+        self.object_name = name.to_string();
+    }
+}
+
+impl Visitor for SqlVisitor {
+    type Break = ();
+
+    fn pre_visit_statement(&mut self, stmt: &Statement) -> ControlFlow<Self::Break> {
+        match stmt {
+            Statement::CreateTable(stmt) => {
+                self.visit_object_name(&stmt.name);
+            }
+            Statement::CreateView { name, .. } => {
+                self.visit_object_name(name);
+            }
+            Statement::CreateFunction { name, .. } => {
+                self.visit_object_name(name);
+            }
+            Statement::CreateProcedure { name, .. } => {
+                self.visit_object_name(name);
+            }
+            Statement::CreateIndex(stmt) => {
+                if let Some(name) = &stmt.name {
+                    self.visit_object_name(name);
+                }
+            }
+            Statement::CreateSequence { name, .. } => {
+                self.visit_object_name(name);
+            }
+            _ => {}
+        }
+        ControlFlow::Continue(())
+    }
 }
 
 #[cfg(test)]
