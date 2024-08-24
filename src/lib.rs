@@ -1,8 +1,11 @@
 mod reference;
+mod utils;
 use reference::read_desired_state;
 use std::collections::{HashSet,HashMap};
 
-use pg_query::protobuf::ParseResult;
+use sqlparser::ast::Statement;
+use sqlparser::dialect::GenericDialect;
+use sqlparser::parser::Parser;
 
 /// Represents a SQL object with its properties and dependencies.
 #[derive(Debug, Clone)]
@@ -10,7 +13,7 @@ pub struct RelationalObject {
     pub schema_name: String,
     pub object_type: String,
     pub object_name: String,
-    pub object_definition: ParseResult,
+    pub object_definition: Vec<Statement>,
     pub dependencies: HashSet<String>,
     pub properties: HashMap<String, String>,
 }
@@ -21,7 +24,7 @@ impl RelationalObject {
         schema_name: String,
         object_type: String,
         object_name: String,
-        object_definition: ParseResult,
+        object_definition: Vec<Statement>,
         dependencies: HashSet<String>,
         properties: HashMap<String, String>,
     ) -> Self {
@@ -63,9 +66,20 @@ pub async fn migrate(base_dir: &str, _connection_string: &str) -> Result<(), Box
     // Apply changes to the deploy log
     // Disconnect from the DB
 
+    // Example of parsing SQL using sqlparser-rs
+    let dialect = GenericDialect {}; // or use a specific dialect
+    let sql = "SELECT * FROM table"; // replace with actual SQL
+    let statements = Parser::parse_sql(&dialect, sql)?;
+
+    // Example usage of parsed statements
+    let _desired_state = RelationalObject::new(
+        "schema".to_string(),
+        "type".to_string(),
+        "name".to_string(),
+        statements,
+        HashSet::new(),
+        HashMap::new(),
+    );
+
     Ok(())
 }
-
-
-
-

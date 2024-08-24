@@ -1,8 +1,9 @@
 use crate::RelationalObject;
+use crate::utils::topsort::topo_sort;
 use indexmap::IndexMap;
-use petgraph::algo::toposort;
-use petgraph::graphmap::DiGraphMap;
-use pg_query::NodeEnum;
+use sqlparser::dialect::GenericDialect;
+use sqlparser::parser::Parser;
+use sqlparser::ast::{Visit, Visitor};
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fs::File;
@@ -146,63 +147,99 @@ fn build_relational_object(
     contents: &str,
     stmt: Option<&Stmt>,
 ) -> Result<RelationalObject, Box<dyn Error>> {
-    let parsed_content = pg_query::parse(&stmt.map_or(contents, |s| &s.value))?;
+    let dialect = GenericDialect {};
+    let parsed_content = Parser::parse_sql(&dialect, &stmt.map_or(contents, |s| &s.value))?;
     let first_object = parsed_content
-        .protobuf
-        .stmts
         .first()
         .ok_or("No objects found in parsed content")?;
-    let node = first_object
-        .stmt
-        .as_ref()
-        .ok_or("No statement found in first object")?;
 
-    if let Some(range_var) = match &node.node {
-        Some(NodeEnum::RangeVar(range_var)) => Some(range_var),
-        Some(NodeEnum::CreateStmt(create_stmt)) => create_stmt.relation.as_ref(),
-        Some(NodeEnum::AlterTableStmt(alter_stmt)) => alter_stmt.relation.as_ref(),
-        Some(NodeEnum::DeleteStmt(delete_stmt)) => delete_stmt.relation.as_ref(),
-        _ => None,
-    } {
-        let object_name = file_path
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| range_var.relname.clone());
-        if object_name != range_var.relname {
-            log::warn!(
-                "Object name '{}' in file does not match name '{}' in SQL",
-                object_name,
-                range_var.relname
-            );
-        }
-        let schema_name = if range_var.schemaname.is_empty() {
-            schema_name.to_string()
-        } else {
-            range_var.schemaname.clone()
-        };
+    let mut visitor = SqlVisitor::new();
+    visitor.visit_statement(first_object);
 
-        let key = match stmt {
-            Some(stmt) => format!(
-                "{}.{}.{}.{}",
-                schema_name, object_type, object_name, stmt.change_name
-            ),
-            None => format!("{}.{}.{}.{}", schema_name, object_type, object_name, "root"),
-        };
-
-        let dependencies = stmt.map_or_else(HashSet::new, |s| s.dependencies.clone());
-        let properties = stmt.map_or_else(HashMap::new, |s| s.properties.clone());
-
-        Ok(RelationalObject::new(
-            schema_name.to_string(),
-            object_type.to_string(),
-            key,
-            parsed_content.protobuf,
-            dependencies,
-            properties,
-        ))
+    let object_name = file_path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| visitor.object_name.clone());
+    if object_name != visitor.object_name {
+        log::warn!(
+            "Object name '{}' in file does not match name '{}' in SQL",
+            object_name,
+            visitor.object_name
+        );
+    }
+    let schema_name = if visitor.schema_name.is_empty() {
+        schema_name.to_string()
     } else {
-        return Err("No RangeVar found in node".into());
+        visitor.schema_name.clone()
+    };
+
+    let key = match stmt {
+        Some(stmt) => format!(
+            "{}.{}.{}.{}",
+            schema_name, object_type, object_name, stmt.change_name
+        ),
+        None => format!("{}.{}.{}.{}", schema_name, object_type, object_name, "root"),
+    };
+
+    let dependencies = stmt.map_or_else(HashSet::new, |s| s.dependencies.clone());
+    let properties = stmt.map_or_else(HashMap::new, |s| s.properties.clone());
+
+    Ok(RelationalObject::new(
+        schema_name.to_string(),
+        object_type.to_string(),
+        key,
+        parsed_content,
+        dependencies,
+        properties,
+    ))
+}
+
+struct SqlVisitor {
+    object_name: String,
+    schema_name: String,
+}
+
+impl SqlVisitor {
+    fn new() -> Self {
+        SqlVisitor {
+            object_name: String::new(),
+            schema_name: String::new(),
+        }
+    }
+
+    fn visit_statement(&mut self, stmt: &sqlparser::ast::Statement) {
+        match stmt {
+            sqlparser::ast::Statement::CreateTable(stmt) => {
+                self.visit_object_name(&stmt.name);
+            }
+            sqlparser::ast::Statement::CreateView { name, .. } => {
+                self.visit_object_name(name);
+            }
+            sqlparser::ast::Statement::CreateFunction { name, .. } => {
+                self.visit_object_name(name);
+            }
+            sqlparser::ast::Statement::CreateProcedure { name, .. } => {
+                self.visit_object_name(name);
+            }
+            sqlparser::ast::Statement::CreateIndex(stmt) => {
+                if let Some(name) = &stmt.name {
+                    self.visit_object_name(name);
+                }
+            }
+            sqlparser::ast::Statement::CreateSequence { name, .. } => {
+                self.visit_object_name(name);
+            }
+            _ => {}
+        }
+    }
+
+    fn visit_object_name(&mut self, name: &sqlparser::ast::ObjectName) {
+        self.object_name = name.to_string();
+    }
+
+    fn visit_schema_name(&mut self, name: &sqlparser::ast::ObjectName) {
+        self.schema_name = name.to_string();
     }
 }
 
@@ -353,19 +390,18 @@ fn parse_change_stmts(
 fn determine_execution_order(
     object_info: &IndexMap<String, RelationalObject>,
 ) -> Result<IndexMap<String, RelationalObject>, Box<dyn std::error::Error>> {
-    // Create a directed graph
-    let mut graph = DiGraphMap::new();
+    // Create a list of edges based on dependencies
+    let mut edges = Vec::new();
 
-    // Add nodes and edges based on dependencies
     for (key, obj) in object_info {
-        graph.add_node(key.as_str());
         for dep in &obj.dependencies {
-            graph.add_edge(dep.as_str(), key.as_str(), ());
+            edges.push((dep.as_str(), key.as_str()));
         }
     }
 
     // Perform topological sort to determine execution order
-    let order = toposort(&graph, None).map_err(|_| "Cycle detected in dependencies")?;
+    let order = topo_sort(&edges)
+        .map_err(|_| "Cycle detected in dependencies")?;
 
     // Convert the order to a vector of strings
     let execution_order: Vec<String> = order.into_iter().map(|s| s.to_string()).collect();

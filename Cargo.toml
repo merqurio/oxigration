@@ -8,15 +8,9 @@ edition = "2021"
 [dependencies]
 clap = "4.1.11"
 env_logger = "0.8.4"
-fern = "0.6"
 indexmap = "1.9.3"
 log = "0.4"
-petgraph = "0.6"
-pg_query = "0.7"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-sqlx = { version = "0.6.2", features = ["any", "postgres", "mysql", "sqlite", "mssql", "runtime-tokio-rustls"] }
-tempfile = "3.2.0"
+sqlparser = { version = "0.50.0", features = ["visitor"] }
 tokio = { version = "1.0", features = ["full"] }
 walkdir = "2.3"
 
