@@ -1,5 +1,5 @@
 use indexmap::IndexMap;
-use sqlx::{query, query_scalar, AnyPool, Executor, Row};
+use sqlx::{query, query_scalar, AnyPool, Executor};
 use std::env;
 use std::error::Error;
 use std::sync::atomic::Ordering;
@@ -139,7 +139,7 @@ pub async fn read_deploy_log(
     connection_string: &str,
 ) -> Result<IndexMap<String, DatabaseObject>, Box<dyn Error>> {
     let pool = AnyPool::connect(connection_string).await?;
-    let mut deploy_log = IndexMap::new();
+    let deploy_log = IndexMap::new();
 
     let rows = query("SELECT change_name FROM oxigration.deploy_log;")
         .fetch_all(&pool)

@@ -24,7 +24,7 @@ pub struct DatabaseObject {
     /// A set of dependencies for this database object.
     pub dependencies: HashSet<String>,
     /// Additional properties associated with the database object.
-    pub properties: HashMap<String, String>,
+    pub _properties: HashMap<String, String>,
     /// The parsed SQL content of the database object.
     pub parsed_content: Option<Statement>,
 }
@@ -48,7 +48,7 @@ impl DatabaseObject {
             change_name,
             value,
             dependencies,
-            properties,
+            _properties: properties,
             parsed_content,
         }
     }
@@ -104,12 +104,15 @@ impl Visitor for SqlVisitor {
             Statement::CreateProcedure { name, .. } => {
                 self.visit_object_name(name);
             }
+            Statement::CreateSequence { name, .. } => {
+                self.visit_object_name(name);
+            }
             Statement::CreateIndex(stmt) => {
                 if let Some(name) = &stmt.name {
                     self.visit_object_name(name);
                 }
             }
-            Statement::CreateSequence { name, .. } => {
+            Statement::AlterTable { name, .. } => {
                 self.visit_object_name(name);
             }
             _ => {}
@@ -204,13 +207,8 @@ pub fn read_source_code(
             // Iterate over the parsed statements
             for (_, mut stmt) in parsed_stmts {
                 // Build a relational object from the parsed statement
-                match relational_object_conformance(
-                    file_path,
-                    schema_name,
-                    object_type,
-                    &contents,
-                    &mut stmt,
-                ) {
+                match relational_object_conformance(file_path, schema_name, object_type, &mut stmt)
+                {
                     Ok(_) => {
                         object_info.insert(stmt.change_name.clone(), stmt);
                     }
@@ -259,7 +257,6 @@ fn relational_object_conformance(
     file_path: &Path,
     schema_name: &str,
     object_type: &str,
-    contents: &str,
     stmt: &mut DatabaseObject,
 ) -> Result<(), Box<dyn Error>> {
     // Extract the file name from the file path
@@ -309,14 +306,30 @@ fn relational_object_conformance(
 
     // Update the existing DatabaseObject
     stmt.change_name = key;
-    stmt.value = contents.to_string();
     stmt.parsed_content = Some(parsed_content);
 
     Ok(())
 }
 
-/// Parses a string containing multiple statements delimited by start and end delimiters,
-/// and returns the text between the delimiters together with the attributes defined in the start_delimiter.
+/// Parses a string containing multiple SQL statements delimited by specified start and end delimiters.
+///
+/// This function processes the input string `content` to extract SQL statements that are enclosed
+/// between the `start_delimiter` and `end_delimiter`. Each statement is associated with a set of attributes
+/// defined in the `start_delimiter` line. The attributes are key-value pairs that provide additional
+/// metadata for the SQL statement.
+///
+/// # Arguments
+///
+/// * `content` - A string slice that holds the entire content containing multiple SQL statements.
+/// * `start_delimiter` - A string slice that marks the beginning of a SQL statement and contains attributes.
+/// * `end_delimiter` - A string slice that marks the end of a SQL statement.
+/// * `key` - The key used to identify the change name in the start_delimiter.
+///
+/// # Returns
+///
+/// This function returns an `IndexMap` where the keys are the unique identifiers for each SQL statement
+/// (derived from the attributes or generated as "rootN" if not specified), and the values are `DatabaseObject`
+/// instances containing the parsed SQL statement, its attributes, and dependencies.
 fn parse_change_stmts(
     content: &str,
     start_delimiter: &str,
@@ -325,11 +338,11 @@ fn parse_change_stmts(
 ) -> IndexMap<String, DatabaseObject> {
     let mut result: IndexMap<String, DatabaseObject> = IndexMap::new();
     let mut dependencies: HashSet<String> = HashSet::new();
-    let mut current_name = String::new();
     let mut value = String::new();
     let mut properties = HashMap::new();
     let mut in_statement = false;
     let mut root_counter = 0;
+    let mut change_name = String::new();
 
     for line in content.lines() {
         if line.trim().starts_with(start_delimiter) {
@@ -342,38 +355,41 @@ fn parse_change_stmts(
                     Some((parts.next()?.to_string(), parts.next()?.to_string()))
                 })
                 .collect();
-            current_name = properties.get(key).cloned().unwrap_or_default();
+            change_name = properties.get(key).cloned().unwrap_or_else(|| {
+                let root_name = format!("root{}", root_counter);
+                root_counter += 1;
+                root_name
+            });
         } else if line.trim() == end_delimiter {
             if in_statement {
                 result.insert(
-                    current_name.clone(),
+                    change_name.clone(),
                     DatabaseObject::new(
-                        current_name.clone(),
+                        change_name.clone(),
                         value.trim().to_string(),
                         dependencies.clone(),
                         properties.clone(),
                         None,
                     ),
                 );
-                dependencies.insert(current_name.clone());
-                current_name.clear();
+                dependencies.insert(change_name.clone());
                 value.clear();
                 properties.clear();
                 in_statement = false;
             } else {
-                let root_name = format!("root{}", root_counter);
+                change_name = format!("root{}", root_counter);
                 root_counter += 1;
                 result.insert(
-                    root_name.clone(),
+                    change_name.clone(),
                     DatabaseObject::new(
-                        root_name.clone(),
+                        change_name.clone(),
                         value.trim().to_string(),
                         dependencies.clone(),
                         properties.clone(),
                         None,
                     ),
                 );
-                dependencies.insert(root_name.clone());
+                dependencies.insert(change_name.clone());
                 value.clear();
             }
         } else if in_statement {
@@ -386,11 +402,11 @@ fn parse_change_stmts(
     }
 
     if !value.trim().is_empty() {
-        let root_name = format!("root{}", root_counter);
+        change_name = format!("root{}", root_counter);
         result.insert(
-            root_name.clone(),
+            change_name.clone(),
             DatabaseObject::new(
-                root_name,
+                change_name,
                 value.trim().to_string(),
                 dependencies,
                 properties,
@@ -703,7 +719,7 @@ mod tests {
     #[test]
     fn test_parse_change_stmts_without_start_delimiters_and_one_end_statement() {
         let content =
-            "CREATE PROCEDURE sp1() LANGUAGE plpgsql AS $$ DECLARE val INTEGER; END $$; \n\nGO";
+            "CREATE FUNCTION func1() RETURNS integer\n    LANGUAGE plpgsql\n    AS '\nBEGIN\n    -- ensure that func comment remains\n    RETURN 1;\nEND;\n';\n\n\nGO";
         let parsed_stmts = parse_change_stmts(content, "//// CHANGE", "GO", "name");
         assert_eq!(parsed_stmts.len(), 1);
         assert!(parsed_stmts.contains_key("root0"));
@@ -721,7 +737,7 @@ mod tests {
     #[test]
     fn test_read_source_code_with_one_schema() {
         let source_code = read_source_code("tests/schemas/baseline/").unwrap();
-        assert_eq!(source_code.len(), 1);
-        assert!(source_code.contains_key("schema1.table.table1.root0"));
+        assert_eq!(source_code.len(), 11);
+        assert!(source_code.contains_key("baseline.function.func_with_overload.root0"));
     }
 }

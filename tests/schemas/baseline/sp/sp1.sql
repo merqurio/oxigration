@@ -1,7 +1,0 @@
-CREATE PROCEDURE sp1()
-    LANGUAGE plpgsql
-    AS $$ DECLARE val INTEGER; END $$;
-
-
-
-GO

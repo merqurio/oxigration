@@ -9,7 +9,7 @@ CREATE TABLE table_a (
 GO
 
 //// CHANGE name=change1
-ALTER TABLE ONLY table_a
+ALTER TABLE table_a
     ADD CONSTRAINT table_a_pkey PRIMARY KEY (a_id);
 
 
