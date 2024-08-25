@@ -184,20 +184,20 @@ mod tests {
 
         let matches = cmd.try_get_matches_from(vec![
             "oxigration",
-            "generate",
+            "migrate",
             "-d",
-            "test_schemas/",
+            "tests/schemas/baseline/",
             "-c",
             "postgresql://test@localhost/test",
         ]);
 
         assert!(matches.is_ok());
         let matches = matches.unwrap();
-        assert_eq!(matches.subcommand_name(), Some("generate"));
+        assert_eq!(matches.subcommand_name(), Some("migrate"));
         if let Some(sub_matches) = matches.subcommand_matches("generate") {
             assert_eq!(
                 sub_matches.get_one::<String>("dir").unwrap(),
-                "test_schemas/"
+                "tests/schemas/baseline/"
             );
             assert_eq!(
                 sub_matches.get_one::<String>("connection").unwrap(),
@@ -212,20 +212,20 @@ mod tests {
 
         let matches = cmd.try_get_matches_from(vec![
             "oxigration",
-            "migrate",
+            "generate",
             "-d",
-            "test_schemas/",
+            "tests/schemas/generated/",
             "-c",
             "postgresql://test@localhost/test",
         ]);
 
         assert!(matches.is_ok());
         let matches = matches.unwrap();
-        assert_eq!(matches.subcommand_name(), Some("migrate"));
+        assert_eq!(matches.subcommand_name(), Some("generate"));
         if let Some(sub_matches) = matches.subcommand_matches("migrate") {
             assert_eq!(
                 sub_matches.get_one::<String>("dir").unwrap(),
-                "test_schemas/"
+                "tests/schemas/generated/"
             );
             assert_eq!(
                 sub_matches.get_one::<String>("connection").unwrap(),
