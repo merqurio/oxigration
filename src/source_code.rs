@@ -58,27 +58,33 @@ impl DatabaseObject {
 struct SqlVisitor {
     object_name: String,
     schema_name: String,
+    database_name: String,
 }
 impl SqlVisitor {
     fn new() -> Self {
         SqlVisitor {
             object_name: String::new(),
             schema_name: String::new(),
+            database_name: String::new(),
         }
     }
 
     fn visit_object_name(&mut self, name: &ObjectName) {
-        // If the ObjectName is in the format of schema.name, return only name
-        self.object_name = name
-            .0
-            .last()
-            .map(|ident| ident.value.clone())
-            .unwrap_or_default();
-        self.schema_name = name
-            .0
-            .first()
-            .map(|ident| ident.value.clone())
-            .unwrap_or_default();
+        match name.0.len() {
+            1 => {
+                self.object_name = name.0[0].value.clone();
+            }
+            2 => {
+                self.schema_name = name.0[0].value.clone();
+                self.object_name = name.0[1].value.clone();
+            }
+            3 => {
+                self.database_name = name.0[0].value.clone();
+                self.schema_name = name.0[1].value.clone();
+                self.object_name = name.0[2].value.clone();
+            }
+            _ => {}
+        }
     }
 }
 impl Visitor for SqlVisitor {
@@ -278,7 +284,7 @@ fn relational_object_conformance(
     visitor.pre_visit_statement(&parsed_content); // Use pre_visit_statement method
 
     // Check if the file name matches the object name
-    if file_name != stmt.change_name {
+    if file_name != visitor.object_name {
         return Err(format!(
             "Object name '{}' in file does not match name '{}' in SQL",
             file_name, visitor.object_name
@@ -287,7 +293,7 @@ fn relational_object_conformance(
     }
 
     // Check if the schema name matches the object schema
-    if visitor.schema_name != schema_name {
+    if !visitor.schema_name.is_empty() && visitor.schema_name != schema_name {
         return Err(format!(
             "Schema name '{}' in file does not match schema name '{}' in SQL",
             schema_name, visitor.schema_name
