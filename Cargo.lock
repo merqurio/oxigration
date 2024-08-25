@@ -816,6 +816,7 @@ dependencies = [
  "log",
  "sqlparser",
  "sqlx",
+ "tempfile",
  "tokio",
  "walkdir",
 ]

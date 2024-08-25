@@ -11,9 +11,18 @@ env_logger = "0.8.4"
 indexmap = "1.9.3"
 log = "0.4"
 sqlparser = { version = "0.50.0", features = ["visitor"] }
-sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "mysql", "sqlite", "tls-rustls-ring"] }
+sqlx = { version = "0.8", features = [
+    "runtime-tokio",
+    "postgres",
+    "mysql",
+    "sqlite",
+    "tls-rustls-ring",
+] }
 tokio = { version = "1.0", features = ["full"] }
 walkdir = "2.3"
+
+[dev-dependencies]
+tempfile = "3.2"
 
 [[bin]]
 name = "oxigration"

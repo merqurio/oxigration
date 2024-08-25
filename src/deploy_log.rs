@@ -4,7 +4,7 @@ use std::env;
 use std::error::Error;
 use std::sync::atomic::Ordering;
 
-use crate::relational_object::DatabaseObject;
+use crate::source_code::DatabaseObject;
 use crate::utils::{format_query_with_schema, SCHEMA_SUPPORT};
 
 /// This function initializes the deploy log and the configuration settings in the database.

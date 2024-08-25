@@ -1,12 +1,10 @@
 mod deploy_log;
-mod reference;
-mod relational_object;
+mod source_code;
 mod utils;
 
 use deploy_log::{init_deploy_log, read_deploy_log};
 use log::{error, info};
-use reference::reference;
-use relational_object::DatabaseObject;
+use source_code::read_source_code;
 use sqlx::{query_scalar, AnyPool};
 use std::env;
 use std::path::Path;
@@ -205,7 +203,7 @@ pub async fn migrate(
     // This step involves parsing the SQL files, processing them, and storing the information in memory. It parses the SQL inside each file and builds a graph representation of each database object, its modifications over time, and other dependencies.
     // The information from the AST tree is used to build a graph where all the other database objects that have a dependency on that object are stated with a relationship.
     // TODO: With table CREATE statements, it rewrites the initial schema based on all the ALTERS that the table might have along all the files, creating a new CREATE statement that includes all the changes.
-    let _reference_source_code = reference(base_dir)?;
+    let _reference_source_code = read_source_code(base_dir)?;
 
     // Step 1: Read changes from the deploy log in the target database
     // This step involves reading the deploy log to understand the current state of the environment.
