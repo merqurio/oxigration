@@ -137,7 +137,6 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use clap::CommandFactory;
 
     #[test]
     fn test_cli_init() {

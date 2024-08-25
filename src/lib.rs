@@ -3,10 +3,11 @@ mod reference;
 mod relational_object;
 mod utils;
 
-use deploy_log::{check_deploy_log_in_db, init_deploy_log, read_deploy_log};
+use deploy_log::{init_deploy_log, read_deploy_log};
 use log::{error, info};
 use reference::reference;
 use relational_object::DatabaseObject;
+use sqlx::{query_scalar, AnyPool};
 use std::env;
 use std::path::Path;
 
@@ -36,9 +37,25 @@ use std::path::Path;
 async fn environment_checks(
     base_dir: &str,
     connection_string: &str,
+    is_init: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // The `install_default_drivers` function is typically used to install the default SQLx drivers for database connections.
     sqlx::any::install_default_drivers();
+
+    // Check if the target DB is reachable
+    let pool = AnyPool::connect(connection_string).await?;
+    let db_reachable: bool = query_scalar("SELECT TRUE;").fetch_one(&pool).await?;
+    if !db_reachable {
+        error!("Target database is not reachable");
+        return Err("Target database is not reachable".into());
+    } else {
+        info!("Target database is reachable");
+
+        // If the deploy log is being initialized, return Ok as there is no need to check anything else
+        if is_init {
+            return Ok(());
+        }
+    }
 
     // Check if the base_dir exists
     if !Path::new(base_dir).exists() {
@@ -48,19 +65,9 @@ async fn environment_checks(
         info!("Base directory exists: {}", base_dir);
     }
 
-    // Check if the target DB is reachable
-    // This is a placeholder check. Replace with actual DB connection check.
-    let db_reachable = true; // replace with actual check
-    if !db_reachable {
-        error!("Target database is not reachable");
-        return Err("Target database is not reachable".into());
-    } else {
-        info!("Target database is reachable");
-    }
-
     // Check if the environment variables are set (DEV, TEST, PROD)
     let env = env::var("ENV").unwrap_or_else(|_| "DEV".to_string());
-    if !["DEV", "TEST", "PROD"].contains(&env.as_str()) {
+    if !["DEV", "TEST", "PROD", "STAGE"].contains(&env.as_str()) {
         error!("Environment variable ENV is not set correctly");
         return Err("Environment variable ENV is not set correctly".into());
     } else {
@@ -68,23 +75,47 @@ async fn environment_checks(
     }
 
     // Check if the target DB is the correct one (DEV, TEST, PROD)
-    // TODO: Store in the database the environment type (DEV, TEST, PROD) and check the env against this setting
-    let correct_db = true; // replace with actual check
-    if !correct_db {
+    let db_env: String =
+        query_scalar("SELECT value FROM oxigration.deploy_log_config WHERE key = 'env';")
+            .fetch_one(&pool)
+            .await?;
+
+    if db_env != env {
         error!(
-            "Target database is not the correct one for the environment: {}",
+            "Target database environment ({}) does not match the environment variable ENV ({})",
+            db_env, env
+        );
+        return Err(
+            "Target database environment does not match the environment variable ENV".into(),
+        );
+    } else {
+        info!(
+            "Target database environment matches the environment variable ENV: {}",
             env
         );
-        return Err("Target database is not the correct one for the environment".into());
-    } else {
-        info!("Target database is correct for the environment: {}", env);
     }
 
-    // Check if rollback is possible (if the deploy log exists in the database)
-    let deploy_log_exists = check_deploy_log_in_db(connection_string).await?;
-    if !deploy_log_exists {
+    // Check if the deploy_log table exists
+    let table_exists: bool = query_scalar(
+        "SELECT EXISTS (SELECT table_name FROM information_schema.tables WHERE table_schema = 'oxigration' AND table_name = 'deploy_log');"
+    )
+    .fetch_one(&pool)
+    .await?;
+
+    if !table_exists {
         error!("Rollback is not possible, deploy log does not exist in the database");
         return Err("Rollback is not possible, deploy log does not exist in the database".into());
+    }
+
+    // Check if the deploy_log table has entries
+    let log_has_entries: bool =
+        query_scalar("SELECT EXISTS (SELECT 1 FROM oxigration.deploy_log LIMIT 1);")
+            .fetch_one(&pool)
+            .await?;
+
+    if !log_has_entries {
+        error!("Rollback is not possible, deploy log does not exist in the database");
+        // return Err("Rollback is not possible, deploy log does not exist in the database".into());
     } else {
         info!("Rollback is possible, deploy log exists in the database");
     }
@@ -126,8 +157,7 @@ async fn environment_checks(
 /// * The target database does not match the environment.
 /// * Rollback is not possible because the deploy log does not exist in the database.
 pub async fn init(connection_string: &str) -> Result<(), Box<dyn std::error::Error>> {
-    // The `install_default_drivers` function is typically used to install the default SQLx drivers for database connections.
-    sqlx::any::install_default_drivers();
+    environment_checks("", connection_string, true).await?;
     init_deploy_log(connection_string).await?;
     Ok(())
 }
@@ -169,7 +199,7 @@ pub async fn migrate(
     connection_string: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Pre-migration checks
-    environment_checks(base_dir, connection_string).await?;
+    environment_checks(base_dir, connection_string, false).await?;
 
     // Step 0: Read and process the desired schema and changes from the source code in base_dir.
     // This step involves parsing the SQL files, processing them, and storing the information in memory. It parses the SQL inside each file and builds a graph representation of each database object, its modifications over time, and other dependencies.
@@ -226,6 +256,6 @@ pub async fn generate(
     // Read the schema from the target database
     // Generate the source code for the schema
     // Store the source code in the base_dir
-    environment_checks(base_dir, connection_string).await?;
+    environment_checks(base_dir, connection_string, false).await?;
     Ok(())
 }

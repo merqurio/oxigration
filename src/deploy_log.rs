@@ -1,5 +1,6 @@
 use indexmap::IndexMap;
 use sqlx::{query, query_scalar, AnyPool, Executor, Row};
+use std::env;
 use std::error::Error;
 use std::sync::atomic::Ordering;
 
@@ -12,11 +13,13 @@ use crate::utils::{format_query_with_schema, SCHEMA_SUPPORT};
 /// 1. Creates a deploy schema if it does not already exist.
 /// 2. Creates a `deploy_log` table to keep track of all the changes that have been applied to the database.
 /// 3. Creates a `deploy_log_config` table to store configuration settings related to the deployment process.
-/// 4. Inserts the initial configuration settings into the `deploy_log_config` table.
+/// 4. Creates a `deploy_execution` table to record each deployment execution.
+/// 5. Inserts the initial configuration settings into the `deploy_log_config` table.
 ///
 /// The `deploy_log` table is crucial for tracking which changes have been applied to the database, ensuring that
 /// changes are not reapplied, and enabling rollback functionality. The `deploy_log_config` table stores settings
-/// that can influence the deployment process, such as environment-specific configurations.
+/// that can influence the deployment process, such as environment-specific configurations. The `deploy_execution`
+/// table records metadata about each deployment execution.
 ///
 /// # Arguments
 ///
@@ -62,7 +65,12 @@ pub async fn init_deploy_log(connection_string: &str) -> Result<bool, Box<dyn Er
             "CREATE TABLE IF NOT EXISTS {schema_prefix}deploy_log (
                 id INTEGER PRIMARY KEY,
                 change_name TEXT NOT NULL,
-                applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                object_name TEXT NOT NULL,
+                change_type TEXT NOT NULL,
+                content_hash TEXT,
+                applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                rollback_content TEXT,
+                deploy_execution_id INTEGER
             );",
         )
         .to_string(),
@@ -70,65 +78,59 @@ pub async fn init_deploy_log(connection_string: &str) -> Result<bool, Box<dyn Er
     .await?;
 
     // Create deploy_log_config table if it does not exist
-    let query = format_query_with_schema(
-        "CREATE TABLE IF NOT EXISTS {schema_prefix}deploy_log_config (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL
-        );",
+    pool.execute(
+        &*format_query_with_schema(
+            "CREATE TABLE IF NOT EXISTS {schema_prefix}deploy_log_config (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );",
+        )
+        .to_string(),
     )
-    .to_string();
-    pool.execute(&*query).await?;
-
-    Ok(true)
-}
-
-/// The function checks if the deploy log exists in the database by checking the deploy_log table and that there is content in the deploy_log table.
-/// This is crucial for determining if a rollback is possible. The function follows these steps:
-///
-/// 1. It verifies if the `deploy_log` table exists in the database.
-/// 2. It checks if there are any entries in the `deploy_log` table.
-/// 3. If the `deploy_log` table exists and has entries, it indicates that rollback is possible.
-/// 4. If the `deploy_log` table does not exist or has no entries, rollback is not possible.
-///
-/// The function returns a boolean indicating if the deploy log exists and has content.
-///
-/// # Arguments
-///
-/// * `connection_string` - A string slice that holds the connection string to the target database.
-///
-/// # Returns
-///
-/// This function returns a `Result`:
-/// * `Ok(true)` if the deploy log exists and has content.
-/// * `Ok(false)` if the deploy log does not exist or has no content.
-/// * `Err(Box<dyn Error>)` if there is an error during the check.
-///
-/// # Errors
-///
-/// This function will return an error if:
-/// * There is an issue connecting to the database.
-/// * There is an error executing the query to check the `deploy_log` table.
-pub async fn check_deploy_log_in_db(connection_string: &str) -> Result<bool, Box<dyn Error>> {
-    let pool = AnyPool::connect(connection_string).await?;
-
-    // Check if the deploy_log table exists
-    let table_exists: bool = query_scalar(
-        "SELECT EXISTS (SELECT table_name FROM information_schema.tables WHERE table_schema = 'oxigration' AND table_name = 'deploy_log');"
-    )
-    .fetch_one(&pool)
     .await?;
 
-    if !table_exists {
-        return Ok(false);
-    }
+    // Create deploy_execution table if it does not exist
+    pool.execute(
+        &*format_query_with_schema(
+            "CREATE TABLE IF NOT EXISTS {schema_prefix}deploy_execution (
+                id INTEGER PRIMARY KEY,
+                requester TEXT NOT NULL,
+                executor TEXT NOT NULL,
+                schema TEXT NOT NULL,
+                product_version TEXT NOT NULL,
+                time_started TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                time_completed TIMESTAMP,
+                status TEXT NOT NULL,
+                reason TEXT
+            );",
+        )
+        .to_string(),
+    )
+    .await?;
 
-    // Check if the deploy_log table has entries
-    let log_has_entries: bool =
-        query_scalar("SELECT EXISTS (SELECT 1 FROM oxigration.deploy_log LIMIT 1);")
-            .fetch_one(&pool)
-            .await?;
+    // Insert the initial configuration settings into the deploy_log_config table
+    sqlx::query(
+        &*format_query_with_schema(
+            "INSERT INTO {schema_prefix}deploy_log_config (key, value) VALUES 
+                            ('init_version', $1),
+                            ('init_at', now()),
+                            ('last_version', $2),
+                            ('last_applied_at', now()),
+                            ('schema', $3),
+                            ('env', $4),
+                            ('db_type', $5);",
+        )
+        .to_string(),
+    )
+    .bind(env!("CARGO_PKG_VERSION"))
+    .bind(env!("CARGO_PKG_VERSION"))
+    .bind("oxigration")
+    .bind(env::var("ENV").unwrap_or_else(|_| "DEV".to_string()))
+    .bind("postgresql")
+    .execute(&pool)
+    .await?;
 
-    Ok(log_has_entries)
+    Ok(true)
 }
 
 /// The function reads the deploy log from the database
@@ -136,10 +138,6 @@ pub async fn check_deploy_log_in_db(connection_string: &str) -> Result<bool, Box
 pub async fn read_deploy_log(
     connection_string: &str,
 ) -> Result<IndexMap<String, DatabaseObject>, Box<dyn Error>> {
-    if !check_deploy_log_in_db(connection_string).await? {
-        return Err("Deploy log does not exist in the database".into());
-    }
-
     let pool = AnyPool::connect(connection_string).await?;
     let mut deploy_log = IndexMap::new();
 
@@ -200,6 +198,17 @@ mod tests {
         .fetch_one(&pool)
         .await?;
         assert!(config_table_exists, "deploy_log_config table should exist");
+
+        // Verify the deploy_execution table exists
+        let execution_table_exists: bool = query_scalar(
+            "SELECT EXISTS (SELECT table_name FROM information_schema.tables WHERE table_name = 'deploy_execution');"
+        )
+        .fetch_one(&pool)
+        .await?;
+        assert!(
+            execution_table_exists,
+            "deploy_execution table should exist"
+        );
 
         Ok(())
     }
